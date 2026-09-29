@@ -2,6 +2,11 @@
 ## Target: unkown ELF
 ## Status: done
 
+### Identity
+####     x86-64 / ELF 64-bit / LSB / PIE / Dinamically linked / stripped
+####     Entry point: 0x11f0
+####     Data: 2`s complement, little endian
+
 3
 RE-001 — Final Reconstruction
 
