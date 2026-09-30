@@ -24,3 +24,5 @@
 
 ### Initial hypotheses
 #### H1: Based on the functions used and the strings present, it can likely be said that this is an input validation system—possibly one that checks passwords.
+#### H2: The 8-byte constant at .rodata[0x2030] controls conditional state transitions through CMOVE.
+#### Unknown: Whether the correct input causes CMOVE to trigger at specific iterations, all iterations, or not at all.
