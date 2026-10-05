@@ -2,9 +2,7 @@
 - target: Unknown stripped elf-64bit
 - status: in progress
 
-### Level 1: 
-
-Level 1: Identify
+### Level 1: Identify
 - x86-64 LSB 2`s complement  |  Strings/data:
 - pie                                         |   "license:"   "invalid license"  "license accepted"
 - stripped                                    |     fgets, stdin, puts, strlen, stdout, strcspn, fwrite
