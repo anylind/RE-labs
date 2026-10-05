@@ -1,87 +1,124 @@
 # RE-003
-- target: Unknown stripped elf-64bit
-- status: in progress
 
-### Level 1: Identify
-- x86-64 LSB 2`s complement  |  Strings/data:
-- pie                                         |   "license:"   "invalid license"  "license accepted"
-- stripped                                    |     fgets, stdin, puts, strlen, stdout, strcspn, fwrite
-- dynamically lenked                 |  
-- Entry point address: 0x1340  |  and also an sequence of trash bytes between 0x2040-0x213f in .rodata
+- Target: unknown stripped ELF-64 executable
+- Status: validation pipeline reconstructed; valid license recovery is still in progress
 
+## Level 1: Identify
 
-### Level 2: Reconstruct C style
-- ```
-    10c6:       be 01 00 00 00          mov    esi,0x1
-    10cb:       48 8d 3d 32 0f 00 00    lea    rdi,[rip+0xf32]        # 2004 <__cxa_finalize@plt+0xf74>
-    10ea:       48 8b 0d 1f 2f 00 00    mov    rcx,QWORD PTR [rip+0x2f1f]        # 4010 <stdout@GLIBC_2.2.5>
-    10f6:       e8 85 ff ff ff          call   1080 <fwrite@plt>
+- x86-64, little endian, two's-complement data
+- PIE, dynamically linked, stripped
+- Entry point: `0x1340`
+- Relevant strings: `license: `, `invalid license`, `license accepted`
+- Relevant imports: `fgets`, `stdin`, `puts`, `strlen`, `stdout`, `strcspn`, `fwrite`
 
-      
-- (10c6, 10cb, 10ea, 10f6)  ->  `fwrite(&(0x2004)string, 1, stdout)`
+The `.rodata` region from `0x2040` through `0x213f` is a 256-byte lookup table. It is live algorithm data, not padding or trash: the first validation loop loads its base into `r10` at `0x1174` and reads `table[index]` through `[r10+r11]` at `0x119c` for every candidate license.
 
-- ```
-    10fb:       48 8b 15 1e 2f 00 00    mov    rdx,QWORD PTR [rip+0x2f1e]        # 4020 <stdin@GLIBC_2.2.5>
-    1102:       be 80 00 00 00          mov    esi,0x80
-    1107:       48 89 df                mov    rdi,rbx
-    110a:       e8 61 ff ff ff          call   1070 <fgets@plt>
+## Level 2: Input handling
 
-- (10fb, 1102, 1107, 110a)  ->  `fgets(&(rsp+0x10)buf, 128, stdin)`
+The code at `0x10c0` is equivalent to the following pseudocode. The stack canary and cleanup instructions are omitted.
 
-- ```
-    110f:       48 85 c0                test   rax,rax
-    1112:       74 2e                   je     1142 <__cxa_finalize@plt+0xb2>
+```c
+fwrite((const void *)0x2004, 1, 9, stdout); // "license: "
 
-    1142:       b8 01 00 00 00          mov    eax,0x1
-    1147:       48 8b 94 24 98 00 00    mov    rdx,QWORD PTR [rsp+0x98]
-    114e:       00 
-    114f:       64 48 2b 14 25 28 00    sub    rdx,QWORD PTR fs:0x28
-    1156:       00 00 
-    1158:       0f 85 d2 01 00 00       jne    1330 <__cxa_finalize@plt+0x2a0>
-    115e:       48 81 c4 a0 00 00 00    add    rsp,0xa0
-    1165:       5b                      pop    rbx
-    1166:       c3                      ret
+char *buf = input_stack_buffer;
+if (fgets(buf, 0x80, stdin) == NULL)
+    return 1;
 
-- ``if (!buf)
-   return 1``
+buf[strcspn(buf, "\n")] = '\0';
 
-- ```
-    1114:       48 89 df                mov    rdi,rbx
-    1117:       48 8d 35 f0 0e 00 00    lea    rsi,[rip+0xef0]        # 200e <__cxa_finalize@plt+0xf7e>
-    111e:       e8 3d ff ff ff          call   1060 <strcspn@plt>
+if (strlen(buf) != 0xc) {
+    puts("invalid license");
+    return 1;
+}
+```
 
-- ``strcspn(&(rsp+0x10)buf, "([rip+0xef0]->0a)\n")``
+The `test rax, rax` at `0x110f` checks the return value of `fgets`, so the failure condition is `fgets(...) == NULL`. The delimiter at `0x200e` is one newline byte followed by NUL, hence `strcspn(buf, "\n")`.
 
-- ```
-    1126:       c6 44 04 10 00          mov    BYTE PTR [rsp+rax*1+0x10],0x0
-- ``buf[strcspn(buf, "\n")] = '\0'``
-- ```
-    1123:       48 89 df                mov    rdi,rbx
-    112b:       e8 10 ff ff ff          call   1040 <strlen@plt>
-- ``rax = strlen(&(rsp+0x10)buf)``
+For the validation code:
 
-- ```
-    1130:       48 83 f8 0c             cmp    rax,0xc
-    1134:       74 31                   je     1167 <__cxa_finalize@plt+0xd7>
-- ``if (rax == 12)
-    goto 1167``
+- `input[0..11]` is the 12-byte string at `[rsp+0x10]`.
+- `work[0..11]` is a derived 12-byte buffer at `[rsp+0x4]`.
+- All state arithmetic below is 32-bit arithmetic modulo `2^32`.
 
-- ```
-    1136:       48 8d 3d d3 0e 00 00    lea    rdi,[rip+0xed3]        # 2010 <__cxa_finalize@plt+0xf80>
-    113d:       e8 ee fe ff ff          call   1030 <puts@plt>
-    1142:       b8 01 00 00 00          mov    eax,0x1
-    1147:       48 8b 94 24 98 00 00    mov    rdx,QWORD PTR [rsp+0x98]
-    114e:       00 
-    114f:       64 48 2b 14 25 28 00    sub    rdx,QWORD PTR fs:0x28
-    1156:       00 00 
-    1158:       0f 85 d2 01 00 00       jne    1330 <__cxa_finalize@plt+0x2a0>
-    115e:       48 81 c4 a0 00 00 00    add    rsp,0xa0
-    1165:       5b                      pop    rbx
-    1166:       c3                      ret
+## Level 3: Validation pipeline
 
-- ``else
-    puts -> "invalid license"
-    return 1``
+### Loop 1: table-based transform (`0x1167-0x11d6`)
 
+The first loop transforms the input into `work` and checks its final state at `0x11dc`.
 
-**H1: *Alright, from this point on, we’re getting into the core encryption algorithm. I took a quick look; there seem to be several loops but they’re separate from one another. After each one, the result is checked against a specific value—if it matches, it proceeds to the next loop.***
+```c
+uint32_t state = 0x31415926;
+
+for (uint32_t i = 0; i < 12; i++) {
+    uint32_t shift = (i & 3) * 8;
+    uint8_t table_index = (uint8_t)(input[i] + 0x11 * i);
+    uint8_t state_byte = (uint8_t)(state >> shift);
+
+    work[i] = (uint8_t)((state_byte ^ table[table_index]) + 0x1d * i);
+
+    state ^= (uint32_t)work[i] << shift;
+    state ^= state >> 16;
+    state *= 0x7feb352d;
+    state ^= state >> 15;
+    state *= 0x846ca68b;
+    state ^= state >> 16;
+}
+
+if (state != 0x2a9a3b3f)
+    invalid;
+```
+
+Here `table` is the 256-byte array at `0x2040-0x213f`; the table index is reduced to one byte by the `movzx` at `0x1196`.
+
+### Loop 2: rolling state mix (`0x11e7-0x1275`)
+
+```c
+uint32_t state = 0x9e3779b9;
+
+for (uint32_t i = 0; i < 12; i++) {
+    state = rol32(state, 5);
+
+    uint8_t mix = (uint8_t)(work[(i + 5) % 12] + 3);
+    mix ^= work[(i + 1) % 12];
+    mix = (uint8_t)(mix + work[i]);
+    mix = (uint8_t)(mix - work[(i + 9) % 12]);
+
+    state ^= (uint32_t)mix * 0x045d9f3b;
+}
+
+if (state != 0xca7f01b6)
+    invalid;
+```
+
+The final comparison is at `0x127b`.
+
+### Loop 3: final state and byte relation (`0x1288-0x1311`)
+
+```c
+uint32_t state = 0x13579bdf;
+uint32_t offset = 0;
+
+for (uint32_t i = 0; i < 12; i++) {
+    uint32_t value = (uint32_t)work[i] + offset;
+    offset += 0x31;
+
+    value ^= state;
+    value = rol32(value, 7);
+    value += 0x6d2b79f5;
+    state = value ^ (value >> 11);
+}
+
+uint16_t byte_check = (uint16_t)(
+    ((uint16_t)work[3] * 0x101 + work[7]) ^
+    ((uint16_t)work[0] << 8 | work[11])
+);
+
+if (byte_check != 0x2bbf || state != 0xbb7c16a9)
+    invalid;
+```
+
+The byte relation is checked at `0x1307`; the final state is checked at `0x1311`. Passing both checks prints `license accepted` and returns zero. Any failed check prints `invalid license` and returns one.
+
+## Open TODO: recover a valid license
+
+The loop bodies, state updates, lookup-table role, and constants are now recorded, but a valid 12-byte input has not yet been derived or independently tested. Finding one and adding a reproducible invocation with its expected `license accepted` output remains open work; this writeup does not claim that the license algorithm has been fully solved.
