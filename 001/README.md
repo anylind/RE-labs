@@ -1,56 +1,110 @@
-# RE-001
-### Target: unkown ELF
-### Status: done
+# RE-001 — Fixed-Width Password Check
 
-### Identity
-- #####   x86-64 / ELF 64-bit / LSB / PIE / Dinamically linked / stripped
-- #####    Entry point: 0x11f0
-- #####    Data: 2`s complement, little endian
--  | section | flags | permission | segment  |
-   |:--------|:------|:--------|:------------|
-   | .dynsym   | A   | R       | LOAD 02     |
-   | .plt      | AX  | RE      | LOAD 03     |
-   | .text     | AX  | RE      | LOAD 03     |
-   | .rodata   | A   | R       | LOAD 04     |
-   | .got.plt  | WA  | RW      | LOAD 05     |
-   | .data     | WA  | RW      | LOAD 05     |
-   | .bss      | WA  | RW      | LOAD 05     |
+**Status:** Complete
 
-### Initial observations
+RE-001 is a small x86-64 PIE executable that reads eight bytes, removes a
+trailing newline, and compares the resulting buffer directly with a constant
+64-bit value. There is no encryption or iterative transformation in this
+sample.
 
-- Program asks for an 8-character password.
-- Input is read with fgets.
-- Newline is removed with strcspn.
-- Input length is checked with strlen.
-- Validation compares 8 bytes of input against a constant.
-- validate returns a boolean-like integer (0 or 1).
-- strings may contain false positives from .text/instruction bytes.
+## Binary profile
 
+| Property | Value |
+| --- | --- |
+| Format | ELF 64-bit |
+| Architecture | x86-64 |
+| Endianness | Little endian |
+| PIE | Yes |
+| Linkage | Dynamically linked |
+| Symbols | Present; the binary is not stripped |
+| Entry point | 0x1150 |
+| Main function | 0x1090 |
+| Stack protection | Stack canary |
 
-### RE-001 — Final Reconstruction
+## Input handling
 
-#### Binary behavior:
+The relevant logic is equivalent to:
 
-1. Program reads user input into a stack buffer.
-2. Input is limited by fgets.
-3. Newline is removed using strcspn.
-4. Input length must be exactly 8 bytes.
-5. The first 8 bytes are loaded as a QWORD.
-6. The QWORD is compared against a constant.
-7. Equal → success message.
-8. Not equal → failure message.
-9. Wrong length → failure message and exit status 1.
-10. Stack canary protects the stack frame.
+~~~c
+printf("enter password '8char': ");
+fgets(buf, 10, stdin);
+buf[strcspn(buf, "\n")] = '\0';
 
-#### Important RE lessons:
+if (strlen(buf) != 8) {
+    puts("Authentication failure.");
+    return 1;
+}
+~~~
 
-- ELF sections ≠ program execution units.
-- Program segments determine runtime memory permissions/layout.
-- strings() is not semantic analysis.
-- Function arguments follow the x86-64 calling convention.
-- RDI is the first integer/pointer argument.
-- RAX is used for return values.
-- Stack offsets reveal local variables.
-- Assembly represents behavior, not source syntax.
-- Little-endian changes how multi-byte values appear in memory.
-- Compiler transformations can make binary logic differ significantly from source expressions.
+The call to fgets accepts at most nine input bytes before the terminating NUL.
+The binary does not check the return value of fgets before using the buffer.
+
+## Validation
+
+At 0x10ee, the program loads this immediate value:
+
+~~~text
+0x2d3c0f1e5a4b7869
+~~~
+
+It then compares that value with the first eight bytes of the input buffer.
+Because x86-64 is little endian, the required bytes must appear in this
+order:
+
+~~~text
+69 78 4b 5a 1e 0f 3c 2d
+ i  x  K  Z        <  -
+~~~
+
+The bytes 0x1e and 0x0f are control characters, so the accepted value is not
+an ordinary printable eight-character password.
+
+The comparison can be represented as:
+
+~~~c
+uint64_t candidate;
+memcpy(&candidate, buf, sizeof candidate);
+
+if (candidate != UINT64_C(0x2d3c0f1e5a4b7869)) {
+    puts("Authentication failure.");
+    return 0;
+}
+
+puts("Wellcome.");
+return 0;
+~~~
+
+The spelling Wellcome. is the exact success message embedded in the binary.
+
+## Known-good input
+
+The following command sends the required bytes without relying on terminal
+input for the control characters:
+
+~~~sh
+printf 'ixKZ\036\017<-\n' | ./binary/re001
+~~~
+
+Expected output:
+
+~~~text
+enter password '8char': Wellcome.
+~~~
+
+## Observed behavior
+
+| Condition | Output | Exit status |
+| --- | --- | --- |
+| Exact eight-byte value | Wellcome. | 0 |
+| Eight bytes with the wrong value | Authentication failure. | 0 |
+| Any other normalized length | Authentication failure. | 1 |
+
+## Reverse engineering notes
+
+- A QWORD comparison must be read together with the target architecture's
+  byte order.
+- The stack offset 0xe is unaligned, but x86-64 permits this load.
+- The prompt says 8char, while the actual accepted byte sequence contains
+  non-printable values.
+- The success and failure paths share the normal return sequence; only the
+  wrong-length path sets a non-zero return value.
