@@ -16,27 +16,6 @@ transforms, checks, and expected behavior.
 Each lab contains its own writeup and the binary or scripts used during the
 analysis.
 
-## Repository layout
-
-```text
-re-labs/
-├── 001/
-│   ├── binary/re001
-│   └── README.md
-├── 002/
-│   ├── binary/re002
-│   ├── scripts/002-password-cracker.c
-│   └── README.md
-├── 003/
-│   ├── binary/re003
-│   └── README.md
-└── README.md
-```
-
-The binaries are analysis inputs. Helper programs and experiments belong in a
-lab's `scripts/` directory, while observations and conclusions belong in its
-`README.md`.
-
 ## Analysis workflow
 
 The writeups generally follow this sequence:
