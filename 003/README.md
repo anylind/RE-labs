@@ -68,6 +68,27 @@ if (state != 0x2a9a3b3f)
     invalid;
 ```
 
+#### Shift-count schedule (`0x1185-0x119a`)
+
+The shift count follows a four-iteration cycle. At `0x1185`, the current loop index in `esi` is copied to `ecx`. The instruction at `0x1189`, `and ecx, 3`, keeps only the lowest two bits, so the result cycles through `0, 1, 2, 3`. The instruction at `0x118f`, `shl ecx, 3`, then multiplies that result by eight. Finally, `shr edx, cl` at `0x119a` uses `cl` as the shift count.
+
+| Iteration (`esi`) | `ecx` after `mov ecx, esi` | `ecx` after `and ecx, 3` | `ecx` after `shl ecx, 3` | Shift count (`cl`) |
+|---:|---:|---:|---:|---:|
+| 0 | `0x00` (`0000 0000`) | `0x00` (`0000 0000`) | `0x00` (`0000 0000`) | 0 bits |
+| 1 | `0x01` (`0000 0001`) | `0x01` (`0000 0001`) | `0x08` (`0000 1000`) | 8 bits |
+| 2 | `0x02` (`0000 0010`) | `0x02` (`0000 0010`) | `0x10` (`0001 0000`) | 16 bits |
+| 3 | `0x03` (`0000 0011`) | `0x03` (`0000 0011`) | `0x18` (`0001 1000`) | 24 bits |
+| 4 | `0x04` (`0000 0100`) | `0x00` (`0000 0000`) | `0x00` (`0000 0000`) | 0 bits |
+| 5 | `0x05` (`0000 0101`) | `0x01` (`0000 0001`) | `0x08` (`0000 1000`) | 8 bits |
+| 6 | `0x06` (`0000 0110`) | `0x02` (`0000 0010`) | `0x10` (`0001 0000`) | 16 bits |
+| 7 | `0x07` (`0000 0111`) | `0x03` (`0000 0011`) | `0x18` (`0001 1000`) | 24 bits |
+| 8 | `0x08` (`0000 1000`) | `0x00` (`0000 0000`) | `0x00` (`0000 0000`) | 0 bits |
+| 9 | `0x09` (`0000 1001`) | `0x01` (`0000 0001`) | `0x08` (`0000 1000`) | 8 bits |
+| 10 | `0x0a` (`0000 1010`) | `0x02` (`0000 0010`) | `0x10` (`0001 0000`) | 16 bits |
+| 11 | `0x0b` (`0000 1011`) | `0x03` (`0000 0011`) | `0x18` (`0001 1000`) | 24 bits |
+
+So the effective shift counts are `0, 8, 16, 24`, repeating for the 12 iterations. The `and` is at `0x1189`; `0x118f` is the left shift that converts the two-bit cycle into a bit-shift count.
+
 Here `table` is the 256-byte array at `0x2040-0x213f`; the table index is reduced to one byte by the `movzx` at `0x1196`.
 
 ### Loop 2: rolling state mix (`0x11e7-0x1275`)
