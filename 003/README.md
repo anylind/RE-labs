@@ -91,6 +91,30 @@ So the effective shift counts are `0, 8, 16, 24`, repeating for the 12 iteration
 
 Here `table` is the 256-byte array at `0x2040-0x213f`; the table index is reduced to one byte by the `movzx` at `0x1196`.
 
+### Lookup-table index hypothesis
+
+The lookup table is 256 bytes long and its base address is stored in `r10`.
+At the beginning of each iteration, `r8d` contains an offset that increases
+by `0x11` per iteration, starting from zero.
+
+The input byte is added to this offset. The instruction at `0x1196`,
+`movzbl %r11b, %r11d`, retains only the low eight bits of the sum before
+the table lookup.
+
+Therefore, for iteration `i`, the effective table index is:
+
+`table_index = (input[i] + 0x11 * i) mod 256`
+
+This means that values exceeding `0xff` before truncation wrap around
+within the 256-entry table. For example, at iteration 8, an input byte
+of `0x7f` produces `0x107` before truncation and `0x07` as the effective
+table index.
+
+A printable-ASCII input range may be used as a search-space assumption,
+but the observed instructions alone do not establish the license's
+allowed character set.
+
+
 ### Loop 2: rolling state mix (`0x11e7-0x1275`)
 
 ```c
