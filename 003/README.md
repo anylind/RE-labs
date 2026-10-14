@@ -167,3 +167,90 @@ The byte relation is checked at `0x1307`; the final state is checked at `0x1311`
 ## Open TODO: recover a valid license
 
 The loop bodies, state updates, lookup-table role, and constants are now recorded, but a valid 12-byte input has not yet been derived or independently tested. Finding one and adding a reproducible invocation with its expected `license accepted` output remains open work; this writeup does not claim that the license algorithm has been fully solved.
+
+## Recovery notes: hypotheses, constraints, and search strategy
+
+### Current input-domain hypothesis
+
+The input-handling code establishes that the license is exactly 12 bytes long after the newline is removed. It does **not** establish that every byte must be printable ASCII. For the current recovery attempt, use the provisional candidate alphabet `0x20..0x7e` (95 possible byte values per position), and treat this as a hypothesis until confirmed by additional code or testing.
+
+The resulting unconstrained search space is `95^12` (approximately `5.4e23`) candidate strings. The expression `12 * 95` counts position/value checks, not complete candidate strings. A full Cartesian-product brute force is therefore not the intended first approach.
+
+### Reverse the state transform before searching blindly
+
+Loop 1 starts from `state = 0x31415926` and requires the final state to equal `0x2a9a3b3f`. Its arithmetic is 32-bit arithmetic modulo `2^32`. Several operations in the mixing pipeline can be inverted:
+
+- `state ^= state >> k` is invertible for a 32-bit state; for example, `y = x ^ (x >> 16)` gives `x = y ^ (y >> 16)`.
+- Multiplication modulo `2^32` by an odd constant is invertible. The constants in this loop are odd, so their modular inverses exist.
+- XOR with a known value is invertible by applying the same XOR again.
+- `movzbl %dl, %edx` discards the upper 24 bits of the old `edx`. In this loop, however, `edx` was explicitly zero-extended from `dl`, so the value immediately after `movzbl` is known to be in `0..255`.
+
+The recommended direction is to undo the final mixing operations first, then reason about the byte injected by `state ^= (uint32_t)work[i] << shift`. Do not skip the `xor`/shift stages when reversing a multiplication: the inverse must follow the exact reverse instruction order.
+
+### Per-iteration candidate filtering
+
+A practical hypothesis is to recover candidates backward from the final Loop 1 state, while enumerating only the allowed byte values for the current input position. For each candidate, use the known 256-byte table and the iteration-specific offsets to calculate the corresponding table index and `work[i]`, then retain only candidates consistent with the reversed state transition.
+
+The table index for iteration `i` is:
+
+```text
+table_index = (input[i] + 0x11 * i) mod 256
+```
+
+The derived work byte is:
+
+```text
+work[i] = ((state_byte ^ table[table_index]) + 0x1d * i) mod 256
+```
+
+where `state_byte = (state >> ((i & 3) * 8)) & 0xff` refers to the state entering that iteration, before the byte injection. Be careful to distinguish the state before injection, the state after injection, and the state after the mixing pipeline.
+
+Because the byte injection changes only one byte lane of the 32-bit state, a reverse step may leave many state bits constrained but not uniquely determined until a candidate `work[i]` is considered. Use this structure to enumerate a small set of candidates and prune inconsistent branches, rather than enumerating all 12-byte strings.
+
+### Use all validation loops as constraints
+
+Loop 1 is not the only verifier. A candidate must also produce a `work[0..11]` buffer that satisfies:
+
+1. Loop 1 final state: `0x2a9a3b3f`.
+2. Loop 2 rolling state: `0xca7f01b6`.
+3. Loop 3 final state: `0xbb7c16a9`.
+4. Loop 3 byte relation: `0x2bbf`.
+
+These checks should be used as constraints during recovery where practical, and all surviving candidates must ultimately be tested by running the original executable and confirming `license accepted`. A match against only one state check is not sufficient proof that a license is valid.
+
+### Suggested solver progression
+
+1. **Validate the model forward.** Reimplement each loop from the disassembly and compare intermediate states and `work` bytes against a debugger trace. This catches off-by-one errors in `r8d`, `r9d`, the loop index, shift counts, and the distinction between pre-mix and post-mix state.
+2. **Invert deterministic operations.** Reverse XOR-shifts and odd multiplications in exact reverse order, using arithmetic modulo `2^32`.
+3. **Enumerate one byte at a time.** Start with the last iteration and the provisional printable alphabet. For each byte candidate, derive the possible preceding state and reject candidates that violate the transition equations.
+4. **Backtrack with pruning.** Preserve only compatible partial assignments and use the other validation loops and byte relation to reject branches early.
+5. **Escalate to a constraint solver if needed.** If the reverse search branches too widely, model the 32-bit operations as bit-vectors in Z3. Keep the printable-byte restriction explicit as a hypothesis, not as a proven property of the binary.
+6. **Verify independently.** Run every final candidate through the unmodified executable and require the actual `license accepted` result.
+
+### Current arithmetic check
+
+Reversing the known Loop 1 target `0x2a9a3b3f` through the final XOR-shift, multiplication by `0x846ca68b`, XOR-shift, and multiplication by `0x7feb352d` gives the following checkpoints:
+
+| Checkpoint | Value |
+|---|---:|
+| Final compared state | `0x2a9a3b3f` |
+| Value after the final XOR-shift at `0x11d4` is undone; EAX after the multiplication at `0x11c9` | `0x2a9a11a5` |
+| State before multiplication by `0x846ca68b` at `0x11c9` | `0x60865e8f` |
+| State before multiplication by `0x7feb352d` at `0x11bc` | `0x60869f82` |
+| EAX after `xor edx, eax` at `0x11ba` | `0x35e792ca` |
+| EDX/EAX at `0x11b5`, before the XOR-shift sequence beginning at `0x11b7` | `0x35e7a72d` |
+
+These last two values are consistent: `0x35e792ca` is the result of `S ^ (S >> 16)`, where `S = 0x35e7a72d`. Therefore, the earlier apparent discrepancy came from assigning `0x35e792ca` to the wrong instruction boundary; it is not the state immediately before byte injection at `0x11b1`.
+
+The modular inverses used for the two multiplications are:
+
+```text
+inverse(0x7feb352d mod 2^32) = 0x1d69e2a5
+inverse(0x846ca68b mod 2^32) = 0x43021123
+```
+
+Both multipliers are odd, so each has a unique inverse modulo `2^32`.
+
+### Current status
+
+The printable-ASCII alphabet, backward per-iteration search, and use of all validation checks are recovery hypotheses and proposed methods—not a recovered license. The next concrete milestone is to validate a forward model against the executable, and then implement a pruned backward search or a Z3 model.
